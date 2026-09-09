@@ -18,7 +18,10 @@ CUDAToolkit 12.8
 g++(Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
 ```
 
-## CEMM-Cublas
+## Kernel优化步骤和结果对比
+![gemm_result](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_result.png)
+
+### CEMM-Cublas
 $$ C_{M*N} = \alpha * A_{M*K} * B_{K*N} + \beta * C_{M*N}$$
 我们以cublasSgemm来作为基准，$alpha=1.0, beta=0.0$.
 ```        
@@ -31,7 +34,7 @@ cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
 
 ![cublasSgemm](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/cublasSgemm.png)
 
-## GEMM-Naive
+### GEMM-Naive
 每个线程去做K维度的内积，然后将结果输出到C矩阵
 ```
 // GPU Naive 矩阵乘法
@@ -64,11 +67,12 @@ void gemm_naive(float* A, float* B, float* C, int M, int N, int K, cudaStream_t 
 - 单个线程在K维度每次都需要做两次Float读取(读取8bytes)和两次浮点操作
 所以计算访存比 $\frac{2}{8} = 0.25 Flop/Byte$，这是一个比较低的值，我们的显卡理论上能达到$70 Flop/Byte$
 
-
 - 理论上我们需要做$M * K + K * N$次读取，$M * N$次写入，$2 * K * M * M$次浮点运算
 理论计算访存比 $\frac{2 * M * N * K}{M * K + N * K} = \frac{2 * M * N}{M + N} Flop/Byte$
 
-## GEMM-Coalescing
+![gemm_naive](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_naive.png)
+
+### GEMM-Coalescing
 我们将naive kernel的row和col互换下，再按一个warp分析，threadIdx.x范围是0~15，threadIdx.y范围是0~1，这是一样的，但是现在row是只有0和1
 col是0~15，那么对应读取A矩阵时，前16个线程读取的同一地址数据，后16个线程也是同一地址数据，这样触发广播机制，读取B矩阵是前16个线程读取的是连续的16个
 float数据，后16个线程也是如此，写入C矩阵也是写入连续的地址，这样相比Naive kernel产生更少的内存事务，这就是合并访问，连续的线程访问连续的地址数据。
@@ -97,8 +101,10 @@ void gemm_coalescing(float* A, float* B, float* C, int M, int N, int K, cudaStre
 ```
 
 - 计算内积时每次都需要从全局内存读取数据，延迟较高
+- 
+![gemm_coalescing](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_coalescing.png)
 
-## GEMM-Smem
+### GEMM-Smem
 - 在CUDA中，内存一般有全局内存、共享内存、常数内存、纹理内存、寄存器内存，我们每次读数据都是从全局内存读取，效率比较低，因为矩阵乘法可以复用数据，
 因此我们可以先把数据搬运到访问延迟比较低的共享内存，后续计算内积时可以从共享内存读取数据。
 - 但是共享内存是有限的，通常是几十kb大小，当矩阵尺寸较大时，就无法把整个矩阵都搬运到共享内存，因此需要分块做，将矩阵切割成TILE_SIZE*TILE_SIZE大小
@@ -137,7 +143,9 @@ void gemm_smem(float* A, float* B, float* C, int M, int N, int K, cudaStream_t s
 
 - 让单个线程只计算C矩阵的一个值对算力有点浪费，我们可以考虑一个线程输出多个C矩阵的值
 
-## GEMM_tile1d
+![gemm_smem](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_smem.png)
+
+### GEMM_tile1d
 我们设置如下参数：
 ```
 // 分配共享内存和寄存器内存
@@ -168,7 +176,9 @@ void gemm_tile1d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 
 - 按照之前的分析我们很容易得到现在的访存比为$\frac{BM*BN}{2 * (BM+BN)} = \frac{128*16}{2 * (128+16)} = 7.11$
 
-## GEMM_tile2d
+![gemm_tile1d](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_tile1d.png)
+
+### GEMM_tile2d
 同样的我们也可以把BN也放大，这样单个线程就可以处理C矩阵TM*TN个元素
 
 我们设置如下参数：
@@ -207,7 +217,9 @@ void gemm_tile2d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 
 - 现在的访存比为$\frac{BM*BN}{2 * (BM+BN)} = \frac{128*128}{2 * (128+128)} = 32$
 
-## GEMM_register
+![gemm_tile2d](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_tile2d.png)
+
+### GEMM_register
 前面我们提到CUDA内存时，寄存器内存比共享内存更快，所以我们可以把共享内存的数据往寄存器搬运，然后再计算累乘，不过实测时发现收益不大
 ```
 // 分配共享内存和寄存器内存
@@ -240,7 +252,9 @@ for (int k = 0; k < BK; k++) {
     
 ```
 
-## GEMM_FLOAT4
+![gemm_register](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_register.png)
+
+### GEMM_FLOAT4
 从 Global Memory 加载数据到 Shared Memory 时，如果每次只搬运一个 float（32 bit），需要执行大量 LDG.32/STS.32 指令。
 GPU 的内存系统支持一次搬运 128 bit（即一个 float4），这能将指令数量减少为原来的 1/4，显著降低指令发射压力。
 ```
@@ -270,7 +284,9 @@ FLOAT4(C[c_row * N + c_col]) = FLOAT4(c_val[m][n<<2]);
 
 - 共享内存的读写存在大量的bank conflicts，bank conflicts来源于一个warp内不同线程访问同一bank不同地址，这会增加额外的内存事务
 
-## GEMM_without_bankconflict
+![gemm_float4](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_float4.png)
+
+### GEMM_without_bankconflict
 根据前面kernel的结构，我们对共享内存的读写索引进行了重排，从而消除了bank conflicts，大大减少了内存事务，提高了访存效率
 ```
 int tid = ty * blockDim.x + tx;
@@ -286,13 +302,114 @@ int b_col = bx * BN + b_smem_col;
 
 ```
 
-## GEMM_double_buffer
-为了避免数据的读写冲突，我们对共享内存和寄存器内存额外分配了一倍的空间，使得当每次读写位置不在同一地址，避免冲突和串行等待，降低了数据同步延迟
+![gemm_without_bankconflict](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_without_bankconflict.png)
 
-## GEMM_async
+### GEMM_double_buffer
+为了避免数据的读写冲突，我们对共享内存和寄存器内存额外分配了一倍的空间，使得当每次读写位置不在同一地址，避免冲突和串行等待，降低了数据同步延迟
+```
+__shared__ float a_smem[2][BK][BM];
+__shared__ float b_smem[2][BK][BN];
+float c_val[TM][TN] = { {0.0f} };
+float reg_a[2][TM] = { 0.0f };
+float reg_b[2][TN] = { 0.0f };
+
+float a_tmp[4];
+// 沿 K 维度步进加载分块
+for (int s = 0; s < K; s += BK) {
+    // 协同加载：每个线程负责搬运一个元素到共享内存
+    int a_col = s + a_smem_col;
+    FLOAT4(a_tmp) = CFLOAT4(A[a_row * K + a_col]);
+    a_smem[write_idx][a_smem_col][a_smem_row] = a_tmp[0];
+    a_smem[write_idx][a_smem_col + 1][a_smem_row] = a_tmp[1];
+    a_smem[write_idx][a_smem_col + 2][a_smem_row] = a_tmp[2];
+    a_smem[write_idx][a_smem_col + 3][a_smem_row] = a_tmp[3];
+
+
+    int b_row = s + b_smem_row;
+    FLOAT4(b_smem[write_idx][b_smem_row][b_smem_col]) = CFLOAT4(B[b_row * N + b_col]);
+
+    __syncthreads();
+
+    // 在极低延迟的共享内存中完成当前 Tile 的乘加计算
+#pragma unroll
+    for (int k = 0; k < BK; k++) {
+#pragma unroll
+        for (int m = 0; m < TM >> 2; m++) {
+            FLOAT4(reg_a[write_idx][m << 2]) = FLOAT4(a_smem[write_idx][k][ty * TM / num_f4_tm + m * BM / num_f4_tm]);
+        }
+#pragma unroll
+        for (int n = 0; n < TN >> 2; n++) {
+            FLOAT4(reg_b[write_idx][n << 2]) = FLOAT4(b_smem[write_idx][k][tx * TN / num_f4_tn + n * BN / num_f4_tn]);
+        }
+
+#pragma unroll
+        for (int m = 0; m < TM; m++) {
+#pragma unroll
+            for (int n = 0; n < TN; n++) {
+                c_val[m][n] += reg_a[write_idx][m] * reg_b[write_idx][n];
+            }
+        }
+    }
+
+    write_idx ^= 1;
+}
+
+```
+
+![gemm_double_buffer](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_double_buffer.png)
+
+### GEMM_async
 前面的共享内存需要从全局内存-L2缓存-共享内存，且必须等待数据读取完毕才能进行下一步操作，我们引入异步拷贝操作，让数据在计算tile块的时候，读取tile+1块，
 从而进一步掩盖数据延迟，减少同步消耗
+```
+// PTX 16字节 (128-bit) 异步拷贝宏：直接从 Global 到 Shared Memory
+__device__ __forceinline__ void cp_async_cg(void* smem_ptr, const void* glob_ptr) {
+    unsigned int smem_addr = __cvta_generic_to_shared(smem_ptr);
+    asm volatile(
+        "cp.async.cg.shared.global [%0], [%1], 16;\n"
+        :: "r"(smem_addr), "l"(glob_ptr)
+        );
+}
 
-## GEMM_async_opt
+// 异步管道提交与等待宏
+__device__ __forceinline__ void cp_async_commit() {
+    asm volatile("cp.async.commit_group;\n");
+}
+
+template<int N_GROUPS>
+__device__ __forceinline__ void cp_async_wait_group() {
+    asm volatile("cp.async.wait_group %0;\n" :: "n"(N_GROUPS));
+}
+
+// B 矩阵: 内存连续，使用硬件 cp.async 16字节零寄存器搬运
+int b_row_0 = 0 + b_smem_row;
+if (b_row_0 < K && b_col < N) {
+    cp_async_cg(&b_smem[0][b_smem_row][b_smem_col], &B[b_row_0 * N + b_col]);
+}
+cp_async_commit();
+cp_async_wait_group<0>(); // 确保 第 0 个 Tile 到位
+__syncthreads();
+```
+![gemm_async](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_async.png)
+
+### GEMM_async_opt
 由于A矩阵需要转置存储的原因，我们异步拷贝只拷贝了B矩阵，还是要等A矩阵拷贝完才能进行下一步的计算，因此，在这里我们提前将A矩阵转置，这样A矩阵的数据读取
 逻辑和B矩阵保持一致，能够同时使用异步拷贝预取A和B矩阵的Tile数据，进一步掩盖数据延迟
+```
+// 预加载第 0 块 (k=0)
+if (a_global_m < M && a_global_k < K) {
+    cp_async_cg(&a_smem[0][a_smem_row][a_smem_col], &A_T[a_global_k * M + a_global_m]);
+    cp_async_cg(&a_smem[0][a_smem_row + 8][a_smem_col], &A_T[(a_global_k + 8)*M + a_global_m]);
+}
+if (b_global_k < K && b_global_n < N) {
+    cp_async_cg(&b_smem[0][b_smem_row][b_smem_col], &B[b_global_k * N + b_global_n]);
+    cp_async_cg(&b_smem[0][b_smem_row + 8][b_smem_col], &B[(b_global_k + 8)*N + b_global_n]);
+}
+cp_async_commit();
+cp_async_wait_group<0>(); // 等待所有数据到位
+```
+![gemm_async_opt](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_async_opt.png)
+
+## 下一步计划和代办项
+
+- cutlass学习
