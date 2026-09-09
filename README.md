@@ -3,7 +3,7 @@
 
 ## 前言
 这里给出我们测试的矩阵乘法形式和维度符号，在后续的代码测试中，为了简化代码，我在代码中并没有做很严谨的边界判断，矩阵尺寸都是4的倍数
-$$ C_{M*N} = A_{M*K} * B_{K*N}$$
+$ C_{M*N} = A_{M*K} * B_{K*N}$
 
 ## 环境
 ```
@@ -359,8 +359,8 @@ for (int s = 0; s < K; s += BK) {
 ![gemm_double_buffer](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_double_buffer.png)
 
 ### GEMM_async
-前面的共享内存需要从全局内存-L2缓存-共享内存，且必须等待数据读取完毕才能进行下一步操作，我们引入异步拷贝操作，让数据在计算tile块的时候，读取tile+1块，
-从而进一步掩盖数据延迟，减少同步消耗
+前面的共享内存需要从全局内存-L2缓存-共享内存，且必须等待数据读取完毕才能进行下一步操作，我们引入异步拷贝操作，直接从全局内存拷贝到共享内存，
+让数据在计算tile块的时候，读取tile+1块，构建数据传递流水线从而进一步掩盖数据延迟，减少同步消耗
 ```
 // PTX 16字节 (128-bit) 异步拷贝宏：直接从 Global 到 Shared Memory
 __device__ __forceinline__ void cp_async_cg(void* smem_ptr, const void* glob_ptr) {
@@ -393,8 +393,8 @@ __syncthreads();
 ![gemm_async](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_async.png)
 
 ### GEMM_async_opt
-由于A矩阵需要转置存储的原因，我们异步拷贝只拷贝了B矩阵，还是要等A矩阵拷贝完才能进行下一步的计算，因此，在这里我们提前将A矩阵转置，这样A矩阵的数据读取
-逻辑和B矩阵保持一致，能够同时使用异步拷贝预取A和B矩阵的Tile数据，进一步掩盖数据延迟
+由于A矩阵需要转置存储的原因，无法向量化读取，因为异步拷贝要求4/8/16字节对齐，我们异步拷贝只拷贝了B矩阵，还是要等A矩阵拷贝完才能进行下一步的计算。
+因此，在这里我们提前将A矩阵转置，这样A矩阵的数据读取逻辑和B矩阵保持一致，能够同时使用异步拷贝预取A和B矩阵的Tile数据，进一步掩盖数据延迟
 ```
 // 预加载第 0 块 (k=0)
 if (a_global_m < M && a_global_k < K) {
@@ -408,6 +408,11 @@ if (b_global_k < K && b_global_n < N) {
 cp_async_commit();
 cp_async_wait_group<0>(); // 等待所有数据到位
 ```
+
+- 这里统计耗时时没有把转置耗时加进去，实际把耗时添加进去的话能到80~90%的cublas性能，网上调研说是cublas能高效的转置读取数据，这一块还没太搞懂，
+得去看下cutlass源码，而且用Nsight Compute时cublas用的kernel名称“void cutlass::Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(T1::Params)”
+这里我猜测是在K维度做了切分然后并行规约求和，后续学习下这块原理。
+
 ![gemm_async_opt](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_async_opt.png)
 
 ## 下一步计划和代办项
