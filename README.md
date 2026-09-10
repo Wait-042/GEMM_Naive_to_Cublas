@@ -52,7 +52,7 @@ python result_plot.py
 ## Kernel优化步骤和结果对比
 ![gemm_result](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_result.png)
 - 从Naive版本逐步引入合并访存、共享内存、一维分块、二维分块、寄存器、向量化、bank conflict消除、双缓冲、异步拷贝手段使得手写GEMM kernel
-性能接近cublas 94%
+达到cublas 94%性能
 - 这里注意到cublas性能波动较大，部分原因是尾部效应，尺寸在2048时，waves per SM = 6.86，而尺寸在3840时 waves per SM = 17.14，SM利用率不够
 - 小尺寸时cublas性能远超手写算子是因为我们的kernel参数写死了，导致sm利用率不够，只有少数sm活跃，cublas会动态调整
 - gemm_doubel_buffer、gemm_async、gemm_async_opt从尺寸2304开始，随着尺寸变大GFLOPS在降低，这同样有部分是尾部效应的影响，
