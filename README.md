@@ -3,7 +3,8 @@
 
 ## 前言
 这里给出我们测试的矩阵乘法形式和维度符号，在后续的代码测试中，为了简化代码，我在代码中并没有做很严谨的边界判断，矩阵尺寸都是4的倍数
-$ C_{M*N} = A_{M*K} * B_{K*N}$
+
+$C_{M*N} = A_{M*K} * B_{K*N}$
 
 ## 环境
 ```
@@ -48,10 +49,20 @@ python result_plot.py
 
 ## Kernel优化步骤和结果对比
 ![gemm_result](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_result.png)
+- 从Naive版本逐步引入合并访存、共享内存、一维分块、二维分块、寄存器、向量化、bank conflict消除、双缓冲、异步拷贝手段使得手写GEMM kernel
+性能接近cublas
+- 这里注意到cublas性能波动较大，部分原因是尾部效应，尺寸在2048时，waves per SM = 6.86，而尺寸在3840时 waves per SM = 17.14，SM利用率不够
+- 同时注意到gemm_doubel_buffer、gemm_async、gemm_async_opt从尺寸2304开始，随着尺寸变大GFLOPS在降低，这同样有部分是尾部效应的影响，
+同时还有L2 cache被击穿影响，因为我们的显卡L2缓存只有48MB、导致尺寸增大后L2 cache命中率会降低，其他手写kernel没有这个情况猜测是瓶颈不在这，
+cublas内部有优化策略，不够这块没完全搞懂原因
 
 ### CEMM-Cublas
-$$ C_{M*N} = \alpha * A_{M*K} * B_{K*N} + \beta * C_{M*N}$$
-我们以cublasSgemm来作为基准，$alpha=1.0, beta=0.0$.
+$C_{M*N} = \alpha * A_{M*K} * B_{K*N} + \beta * C_{M*N}$
+
+我们以cublasSgemm来作为基准
+
+$alpha=1.0, beta=0.0$.
+
 ```        
 cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
             N, M, K, &alpha, 
@@ -86,16 +97,13 @@ void gemm_naive(float* A, float* B, float* C, int M, int N, int K, cudaStream_t 
     gemm_naive_kernel << <blocks, threads, 0, stream >> > (A, B, C, M, N, K);
 }
 ```
-- 我们先按一个warp分析，threadIdx.x范围是0~15，threadIdx.y范围是0~1，那么对应读取A矩阵和写入C矩阵就会出现跨行读写情况，
+- 我们先按一个warp分析，threadIdx.x范围是0-15，threadIdx.y范围是0-1，那么对应读取A矩阵和写入C矩阵就会出现跨行读写情况，
 这样会产生更多的内存事务
 
-- 现在内存读取量是$(2 * M * N * K + M * N) * 4$ Bytes、浮点运算量是$2 * M * N * K$
+- 现在内存读取量是 $(2 * M * N * K + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
 所以计算访存比 $\frac{2 * M * N * K}{(2 * M * N * K + M * N) * 4} \approx 0.25 Flop/Byte$，这是一个比较低的值，我们的显卡理论上能达到$70 Flop/Byte$
 
-- 单个线程在K维度每次都需要做两次Float读取(读取8bytes)和两次浮点操作
-所以计算访存比 $\frac{2}{8} = 0.25 Flop/Byte$，这是一个比较低的值，我们的显卡理论上能达到$70 Flop/Byte$
-
-- 理论上我们需要做$M * K + K * N$次读取，$M * N$次写入，$2 * K * M * M$次浮点运算
+- 理论上我们需要做 $M * K + K * N$ 次读取，$M * N$ 次写入， $2 * K * M * M$ 次浮点运算
 理论计算访存比 $\frac{2 * M * N * K}{M * K + N * K} = \frac{2 * M * N}{M + N} Flop/Byte$
 
 - SOL对比(绿色是cublas gemm)
@@ -103,15 +111,15 @@ void gemm_naive(float* A, float* B, float* C, int M, int N, int K, cudaStream_t 
 ![gemm_naive_sol](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_naive_sol.png)
 
 - warp state statistics
-从warp stall能看出来“Stall LG Throttle”，下面提示也说明了对global memory操作极其频繁
+从warp stall能看出来“Stall LG Throttle”很长，说明有很多内存读取操作导致指令队列压力大，下面提示也说明了对global memory操作极其频繁
 ![gemm_naive_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_naive_warp_state_statistics.png)
 
 - GFLOPS对比
 ![gemm_naive](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_naive.png)
 
 ### GEMM-Coalescing
-我们将naive kernel的row和col互换下，再按一个warp分析，threadIdx.x范围是0~15，threadIdx.y范围是0~1，这是一样的，但是现在row是只有0和1
-col是0~15，那么对应读取A矩阵时，前16个线程读取的同一地址数据，后16个线程也是同一地址数据，这样触发广播机制，读取B矩阵是前16个线程读取的是连续的16个
+我们将naive kernel的row和col互换下，再按一个warp分析，threadIdx.x范围是0-15，threadIdx.y范围是0-1，这是一样的，但是现在row是只有0和1
+col是0-15，那么对应读取A矩阵时，前16个线程读取的同一地址数据，后16个线程也是同一地址数据，这样触发广播机制，读取B矩阵是前16个线程读取的是连续的16个
 float数据，后16个线程也是如此，写入C矩阵也是写入连续的地址，这样相比Naive kernel产生更少的内存事务，这就是合并访问，连续的线程访问连续的地址数据。
 ```
 // GPU 矩阵乘法合并访存
@@ -179,12 +187,12 @@ void gemm_smem(float* A, float* B, float* C, int M, int N, int K, cudaStream_t s
 }
 ```
 
-- 现在内存读取量是$(\frac{2 * M * N * K}{TILE SIZE} + M * N) * 4$ Bytes、浮点运算量是$2 * M * N * K$
+- 现在内存读取量是 $(\frac{2 * M * N * K}{TILE SIZE} + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
 所以计算访存比 $\frac{2 * M * N * K}{(\frac{2 * M * N * K}{TILE SIZE} + M * N) * 4} \approx \frac{TILE SIZE}{4} Flop/Byte$，
 刚好是之前计算Naive版本的Tile_Size倍，这正是因为我们在K维度对数据进行了Tile_Size次复用，Tile_Size=16时访存比为4
 
-- 如果我们考虑改变Tile的形状，对A取BM*BK，B取BK*BM
-那么现在访存比为$\frac{2*BM*BN*K + M*N}{(BM*K+K*BN)*4} \approx \frac{BM*BN}{2 * (BM+BN)}$，从这个公式我们可以发现访存比和K无关了，
+- 如果我们考虑改变Tile的形状，对A取 $BM*BK$ ，B取 $BK*BM$ 
+那么现在访存比为 $\frac{2*BM*BN*K + M*N}{(BM*K+K*BN)*4} \approx \frac{BM*BN}{2 * (BM+BN)}$，从这个公式我们可以发现访存比和K无关了，
 所以我们可以增大BM和BN的大小
 
 - 让单个线程只计算C矩阵的一个值对算力有点浪费，我们可以考虑一个线程输出多个C矩阵的值
@@ -225,7 +233,7 @@ void gemm_tile1d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 }
 ```
 
-- 按照之前的分析我们很容易得到现在的访存比为$\frac{BM*BN}{2 * (BM+BN)} = \frac{128*16}{2 * (128+16)} = 7.11$
+- 按照之前的分析我们很容易得到现在的访存比为 $\frac{BM*BN}{2 * (BM+BN)} = \frac{128*16}{2 * (128+16)} = 7.11$
 
 - warp state statistics
 “Stall MIO Throttle”相比GEMM_smem有明显改善，这是因为我们数据复用率更高
@@ -236,6 +244,7 @@ void gemm_tile1d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 ![gemm_tile1d_memory_workload](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_tile1d_memory_workload.png)
 
 - GFLOPS对比
+这里能看到性能提升比较多
 ![gemm_tile1d](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_tile1d.png)
 
 ### GEMM_tile2d
@@ -275,7 +284,7 @@ void gemm_tile2d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 }
 ```
 
-- 现在的访存比为$\frac{BM*BN}{2 * (BM+BN)} = \frac{128*128}{2 * (128+128)} = 32$
+- 现在的访存比为 $\frac{BM*BN}{2 * (BM+BN)} = \frac{128*128}{2 * (128+128)} = 32$
 
 - warp state statistics
 现在阻塞周期降低了很多，“Stall Long Scoreboard”这个指标含义是L1Tex(Global, Local, Surface, Tex)结果依赖，后续操作强依赖前面的数据操作，因此需等待前面的数据操作完成
@@ -562,9 +571,9 @@ cp_async_commit();
 cp_async_wait_group<0>(); // 等待所有数据到位
 ```
 
-- 这里统计耗时时没有把矩阵转置耗时加进去，把耗时添加进去的话实际能到80~95%的cublas性能，网上调研说是cublas能高效的转置读取数据，这一块还没太搞懂，
+- **这里统计耗时时没有把矩阵转置耗时加进去，把耗时添加进去的话实际能到80~95%的cublas性能，网上调研说是cublas能高效的转置读取数据，这一块还没太搞懂，
 得去看下cutlass源码，而且用Nsight Compute时cublas用的kernel名称“void cutlass::Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(T1::Params)”
-这里我猜测是在K维度做了切分然后并行规约求和，后续学习下这块原理。
+这里我猜测是在K维度做了切分然后并行规约求和，后续学习下这块原理**
 
 - SOL对比(绿色是cublas gemm)
 计算吞吐稍微逊色cublas
