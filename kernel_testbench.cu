@@ -822,7 +822,6 @@ __global__ void transpose_kernel(const float* input, float* output, int rows, in
     const int in_y = threadIdx.y + BLOCK_SIZE * blockIdx.y;
 
     const int in_cols = cols;
-    const int in_rows = rows;
 
     const int input_idx = in_x + in_cols * in_y;
     if (input_idx < rows * cols) {
@@ -1105,7 +1104,9 @@ void gemm_async_opt(float* A, float* A_T, float* B, float* C, int M, int N, int 
     const int BK = 16;
     const int TM = 8;
     const int TN = 8;
-
+	
+	transpose(A, A_T, M, K, stream);
+	
     int threads = TILE_SIZE*TILE_SIZE;
     dim3 blocks(CEIL(N, BN), CEIL(M, BM));
     gemm_async_opt_kernel <BM, BN, BK, TM, TN> << <blocks, threads, 0, stream >> > (A_T, B, C, M, N, K);
@@ -1114,9 +1115,9 @@ void gemm_async_opt(float* A, float* A_T, float* B, float* C, int M, int N, int 
 int main() {
     // 测试参数
     const int start_size = 256;
-    const int end_size = 256;
+    const int end_size = 6400;
     const int step = 256;
-    const int num_runs = 1;  // 每个 kernel 重复次数（尺寸较大时建议设为 1 或 2）
+    const int num_runs = 10;  // 每个 kernel 重复次数（尺寸较大时建议设为 1 或 2）
 
     // 打开输出文件
     std::ofstream outfile("gemm_benchmark.txt");
@@ -1179,7 +1180,6 @@ int main() {
             {"gemm_without_bankconflict", [&]() { gemm_without_bankconflict(dev_A, dev_B, dev_C, M, N, K, stream); }},
             {"gemm_double_buffer",[&]() { gemm_double_buffer(dev_A, dev_B, dev_C, M, N, K, stream); }},
             {"gemm_async",        [&]() { gemm_async(dev_A, dev_B, dev_C, M, N, K, stream); }},
-            {"transpose",         [&]() { transpose(dev_A, dev_A_T, M, K, stream); }},
             {"gemm_async_opt",    [&]() { gemm_async_opt(dev_A, dev_A_T, dev_B, dev_C, M, N, K, stream); }},
             {"cublasSgemm",       [&]() {
                 cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,

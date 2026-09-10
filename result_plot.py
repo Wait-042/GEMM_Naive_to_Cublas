@@ -8,46 +8,81 @@ import matplotlib.pyplot as plt
 
 
 if __name__ == "__main__":
-    # 读取基准测试结果（CSV 格式）
     df = pd.read_csv(r'.\gemm_benchmark.txt')
     kernel_order = df['kernel'].unique()
 
-    # kernel_sel里设置了kernel name的话会只统计kernel_sel里面的kernel结果
-    # kernel_sel = ['gemm_naive', 'gemm_coalescing', 'gemm_smem', 'gemm_tile1d', 'gemm_tile2d', 'gemm_register',
-    #               'gemm_float4', 'gemm_without_bankconflict', 'gemm_double_buffer', 'gemm_async', 'gemm_async_opt', 'cublasSgemm',]
     kernel_sel = []
-    # 查看数据前几行，确认列名和格式
+    # kernel_sel = ['gemm_naive', 'gemm_coalescing', 'gemm_smem', 'gemm_tile1d', 'gemm_tile2d',
+    #               'gemm_register', 'gemm_float4', 'gemm_without_bankconflict', 'gemm_double_buffer',
+    #               'gemm_async', 'gemm_async_opt', 'cublasSgemm']
+
+    # 只统计 M >= limit_min_M 的尺寸；设为 0 表示不限制
+    limit_min_M = 2048
+
     print(df.head())
 
-    # 因为 M=N=K，取 M 列作为矩阵尺寸
+    # 剔除 transpose（已合并进 gemm_async_opt）
+    df = df[df['kernel'] != 'transpose'].copy()
+
+    # 应用尺寸下限过滤
+    if limit_min_M > 0:
+        df = df[df['M'] >= limit_min_M].copy()
+
+    if df.empty:
+        raise SystemExit(f"No data with M >= {limit_min_M}. Check limit_min_M or input file.")
+
     df['size'] = df['M']
     all_M = sorted(df['M'].unique())
 
-    # 创建一个图形
+    # ------------------------------------------------------------------
+    # 计算相对 cuBLAS 的百分比（逐尺寸，再取均值）
+    # ------------------------------------------------------------------
+    cublas_df = (
+        df[df['kernel'] == 'cublasSgemm']
+        .set_index(['M', 'N', 'K'])['gflops']
+    )
+    df['cublas_gflops'] = df.set_index(['M', 'N', 'K']).index.map(cublas_df)
+    df['pct_of_cublas'] = df['gflops'] / df['cublas_gflops'] * 100.0
+
+    pct_summary = (
+        df.groupby('kernel')['pct_of_cublas']
+        .agg(['mean', 'min', 'max', 'count'])
+        .sort_values('mean', ascending=False)
+    )
+
+    print(f"\n===== Relative to cuBLAS (GFLOPS %), M >= {limit_min_M} =====")
+    print(f"{'Kernel':<32}{'Mean %':>10}{'Min %':>10}{'Max %':>10}{'#Sizes':>8}")
+    print("-" * 70)
+    for kernel_name, row in pct_summary.iterrows():
+        if kernel_name == 'cublasSgemm':
+            print(f"{kernel_name:<32}{100.0:>10.2f}{100.0:>10.2f}{100.0:>10.2f}{int(row['count']):>8}")
+        else:
+            print(f"{kernel_name:<32}{row['mean']:>10.2f}{row['min']:>10.2f}{row['max']:>10.2f}{int(row['count']):>8}")
+    print("=" * 70)
+
+    # ------------------------------------------------------------------
+    # 绘图
+    # ------------------------------------------------------------------
     plt.figure(figsize=(12, 8))
 
-    # 按照原始顺序绘制每个 kernel 的折线
     for kernel_name in kernel_order:
-        sub_df = df[df['kernel'] == kernel_name]
-        # 筛选当前 kernel 的数据
         if kernel_name == 'transpose':
             continue
-        else:
-            if kernel_sel and kernel_name in kernel_sel:
-                # 绘制折线，X 轴为矩阵尺寸，Y 轴为 GFLOPS
-                plt.plot(sub_df['M'], sub_df['gflops'], marker='o', label=kernel_name)
-            else:
-                plt.plot(sub_df['M'], sub_df['gflops'], marker='o', label=kernel_name)
+        if kernel_sel and kernel_name not in kernel_sel:
+            continue
 
-    # 设置坐标轴标签和标题
+        sub_df = df[df['kernel'] == kernel_name]
+        if sub_df.empty:
+            continue
+        plt.plot(sub_df['M'], sub_df['gflops'], marker='o', label=kernel_name)
+
     plt.xlabel('Matrix Size (M=N=K)')
     plt.xticks(all_M, rotation=45)
     plt.ylabel('GFLOPS')
-    plt.title('GEMM Performance vs Matrix Size')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')  # 图例放在外侧，避免遮挡
+    plt.title(f'GEMM Performance vs Matrix Size (M >= {limit_min_M})')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
 
-    # 保存图像
     # plt.savefig('gemm_performance.png', dpi=300, bbox_inches='tight')
     plt.show(block=True)
