@@ -4,7 +4,9 @@
 ## 前言
 这里给出我们测试的矩阵乘法形式和维度符号，在后续的代码测试中，为了简化代码，我在代码中并没有做很严谨的边界判断，矩阵尺寸都是4的倍数
 
-$C_{M*N} = A_{M*K} * B_{K*N}$
+$$
+C_{M*N} = A_{M*K} * B_{K*N}
+$$
 
 ## 环境
 ```
@@ -77,7 +79,9 @@ cublas内部有优化策略，不够这块没完全搞懂原因
 
 ### CEMM-Cublas
 
-$C_{M*N} = \alpha * A_{M*K} * B_{K*N} + \beta * C_{M*N}$
+$$
+C_{M*N} = \alpha * A_{M*K} * B_{K*N} + \beta * C_{M*N}
+$$
 
 我们以cublasSgemm来作为基准
 
@@ -123,7 +127,7 @@ void gemm_naive(float* A, float* B, float* C, int M, int N, int K, cudaStream_t 
 - 现在内存读取量是 $(2 * M * N * K + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
 所以计算访存比 $\frac{2 * M * N * K}{(2 * M * N * K + M * N) * 4} \approx 0.25 Flop/Byte$，这是一个比较低的值，我们的显卡理论上能达到 $70 Flop/Byte$ 
 
-- 理论上我们需要做 $M * K + K * N$ 次读取，$M * N$ 次写入， $2 * K * M * M$ 次浮点运算
+- 理论上我们需要做 $M * K + K * N$ 次读取，M * N次写入， $2 * K * M * M$ 次浮点运算
 理论计算访存比 $\frac{2 * M * N * K}{M * K + N * K} = \frac{2 * M * N}{M + N} Flop/Byte$
 
 - SOL对比(绿色是cublas gemm)
@@ -214,7 +218,9 @@ void gemm_smem(float* A, float* B, float* C, int M, int N, int K, cudaStream_t s
 - 如果我们考虑改变Tile的形状，对A取 $BM * BK$，B取 $BK * BM$ 
 那么现在访存比为
 
-$\frac{2*BM*BN*K + M*N}{(BM*K+K*BN)*4} \approx \frac{BM*BN}{2 * (BM+BN)}$ 
+$$
+\frac{2*BM*BN*K + M*N}{(BM*K+K*BN)*4} \approx \frac{BM*BN}{2 * (BM+BN)}
+$$ 
 
 从这个公式我们可以发现访存比和K无关了，所以我们可以增大BM和BN的大小
 
@@ -258,7 +264,9 @@ void gemm_tile1d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 
 - 按照之前的分析我们很容易得到现在的访存比为 
 
-$\frac{BM*BN}{2 * (BM+BN)} = \frac{128*16}{2 * (128+16)} = 7.11$
+$$
+\frac{BM*BN}{2 * (BM+BN)} = \frac{128*16}{2 * (128+16)} = 7.11
+$$
 
 - warp state statistics
 “Stall MIO Throttle”相比GEMM_smem有明显改善，这是因为我们数据复用率更高
@@ -311,7 +319,9 @@ void gemm_tile2d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 
 - 现在的访存比为 
 
-$\frac{BM*BN}{2 * (BM+BN)} = \frac{128*128}{2 * (128+128)} = 32$
+$$
+\frac{BM*BN}{2 * (BM+BN)} = \frac{128*128}{2 * (128+128)} = 32
+$$
 
 - warp state statistics
 现在阻塞周期降低了很多，“Stall Long Scoreboard”这个指标含义是L1Tex(Global, Local, Surface, Tex)结果依赖，后续操作强依赖前面的数据操作，因此需等待前面的数据操作完成
