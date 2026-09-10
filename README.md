@@ -125,10 +125,20 @@ void gemm_naive(float* A, float* B, float* C, int M, int N, int K, cudaStream_t 
 这样会产生更多的内存事务
 
 - 现在内存读取量是 $(2 * M * N * K + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
-所以计算访存比 $\frac{2 * M * N * K}{(2 * M * N * K + M * N) * 4} \approx 0.25 Flop/Byte$，这是一个比较低的值，我们的显卡理论上能达到 $70 Flop/Byte$ 
+所以计算访存比 
+
+$$
+\frac{2 * M * N * K}{(2 * M * N * K + M * N) * 4} \approx 0.25 Flop/Byte
+$$
+
+- 这是一个比较低的值，我们的显卡理论上能达到 $70 Flop/Byte$ 
 
 - 理论上我们需要做 $M * K + K * N$ 次读取，M * N次写入， $2 * K * M * M$ 次浮点运算
-理论计算访存比 $\frac{2 * M * N * K}{M * K + N * K} = \frac{2 * M * N}{M + N} Flop/Byte$
+理论计算访存比 
+
+$$
+\frac{2 * M * N * K}{M * K + N * K} = \frac{2 * M * N}{M + N} Flop/Byte
+$$
 
 - SOL对比(绿色是cublas gemm)
 从SOL对比来看Naive是memory bond，说明内存访问很频繁，需要优化内存访问
@@ -212,7 +222,12 @@ void gemm_smem(float* A, float* B, float* C, int M, int N, int K, cudaStream_t s
 ```
 
 - 现在内存读取量是 $(\frac{2 * M * N * K}{TILE SIZE} + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
-所以计算访存比 $\frac{2 * M * N * K}{(\frac{2 * M * N * K}{TILE SIZE} + M * N) * 4} \approx \frac{TILE SIZE}{4} Flop/Byte$，
+所以计算访存比 
+
+$$
+\frac{2 * M * N * K}{(\frac{2 * M * N * K}{TILE SIZE} + M * N) * 4} \approx \frac{TILE SIZE}{4} Flop/Byte
+$$
+
 刚好是之前计算Naive版本的Tile_Size倍，这正是因为我们在K维度对数据进行了Tile_Size次复用，Tile_Size=16时访存比为4
 
 - 如果我们考虑改变Tile的形状，对A取 $BM * BK$，B取 $BK * BM$ 
