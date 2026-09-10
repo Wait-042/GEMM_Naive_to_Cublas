@@ -33,6 +33,12 @@ make -j$(nproc)
 ./app
 ```
 
+PS: 异步拷贝只在sm80以上架构可使用
+CMakeLists.txt文件中需要删除这行，.cu文件也要注意注释掉异步拷贝kernel
+```
+set(CMAKE_CUDA_ARCHITECTURES 89)
+```
+
 - python
 前面cuda跑出结果后用python画图
 ```
