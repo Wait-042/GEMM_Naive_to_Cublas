@@ -394,6 +394,9 @@ for (int k = 0; k < BK; k++) {
 从 Global Memory 加载数据到 Shared Memory 时，如果每次只搬运一个 float（32 bit），需要执行大量 LDG.32/STS.32 指令。
 GPU 的内存系统支持一次搬运 128 bit（即一个 float4），这能将指令数量减少为原来的 1/4，显著降低指令发射压力。
 ```
+#define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
+#define CFLOAT4(pointer) (reinterpret_cast<const float4*>(&(pointer))[0])
+
 // 分配共享内存和寄存器内存
 __shared__ float a_smem[BM][BK];
 __shared__ float b_smem[BK][BN];
