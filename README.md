@@ -1,5 +1,5 @@
 # GEMM_Naive_to_Cublas
-在此记录自己学习GEMM的过程，尝试手写Float GEMM kernel从naive版本逐步优化使其性能接近cublas，当前手写kernel差不多有94%的cublas性能
+在此记录自己学习GEMM的过程，尝试手写Float GEMM kernel从naive版本逐步优化使其性能接近cublas，当前手写kernel有94%的cublas性能
 
 ## 前言
 这里给出我们测试的矩阵乘法形式和维度符号，在后续的代码测试中，为了简化代码，我在代码中并没有做很严谨的边界判断，矩阵尺寸都是4的倍数
@@ -57,7 +57,7 @@ python result_plot.py
 - 小尺寸时cublas性能远超手写算子是因为我们的kernel参数写死了，导致sm利用率不够，只有少数sm活跃，cublas会动态调整
 - gemm_doubel_buffer、gemm_async、gemm_async_opt从尺寸2304开始，随着尺寸变大GFLOPS在降低，这同样有部分是尾部效应的影响，
 同时还有L2 cache被击穿影响，因为我们的显卡L2缓存只有48MB、导致尺寸增大后L2 cache命中率会降低，其他手写kernel没有这个情况猜测是瓶颈不在这，
-cublas内部有优化策略，不够这块没完全搞懂原因
+cublas内部有优化策略，不过这块没完全搞懂原因
 
 =============== Relative to cuBLAS (GFLOPS %), M >= 2048 ===============
 
