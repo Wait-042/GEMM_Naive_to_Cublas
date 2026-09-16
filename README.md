@@ -78,10 +78,10 @@ cublas内部有优化策略，不过这块没完全搞懂原因
 
 ==========================================================================
 
-### CEMM-Cublas
+### GEMM-Cublas
 
 $$
-C_{M*N} = \alpha * A_{M*K} * B_{K*N} + \beta * C_{M*N}
+C_{M \times N} = \alpha * A_{M \times K} * B_{K \times N} + \beta * C_{M \times N}
 $$
 
 我们以cublasSgemm来作为基准
@@ -235,7 +235,7 @@ $$
 那么现在访存比为
 
 $$
-\frac{2*BM*BN*K + M*N}{(BM*K+K*BN)*4} \approx \frac{BM*BN}{2 * (BM+BN)}
+\frac{2 * BM * BN * K + M * N}{(BM * K + K * BN) * 4} \approx \frac{BM * BN}{2 * (BM + BN)}
 $$ 
 
 从这个公式我们可以发现访存比和K无关了，所以我们可以增大BM和BN的大小
@@ -281,7 +281,7 @@ void gemm_tile1d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 - 按照之前的分析我们很容易得到现在的访存比为 
 
 $$
-\frac{BM*BN}{2 * (BM+BN)} = \frac{128*16}{2 * (128+16)} = 7.11
+\frac{BM * BN}{2 * (BM + BN)} = \frac{128 * 16}{2 * (128 + 16)} = 7.11
 $$
 
 - warp state statistics
@@ -336,7 +336,7 @@ void gemm_tile2d(float* A, float* B, float* C, int M, int N, int K, cudaStream_t
 - 现在的访存比为 
 
 $$
-\frac{BM*BN}{2 * (BM+BN)} = \frac{128*128}{2 * (128+128)} = 32
+\frac{BM*BN}{2 * (BM + BN)} = \frac{128 * 128}{2 * (128 + 128)} = 32
 $$
 
 - warp state statistics
