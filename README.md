@@ -50,7 +50,7 @@ python result_plot.py
 ```
 
 ## Kernel优化步骤和结果对比
-![gemm_result](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_result.png)
+![gemm_result](fig/gemm_result.png)
 - 从Naive版本逐步引入合并访存、共享内存、一维分块、二维分块、寄存器、向量化、bank conflict消除、双缓冲、异步拷贝手段使得手写GEMM kernel
 达到cublas 94%性能
 - 这里注意到cublas性能波动较大，部分原因是尾部效应，尺寸在2048时，waves per SM = 6.86，而尺寸在3840时 waves per SM = 17.14，SM利用率不够
@@ -96,7 +96,7 @@ cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
             &beta, C, N);
 ```
 
-![cublasSgemm](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/cublasSgemm.png)
+![cublasSgemm](fig/cublasSgemm.png)
 
 ### GEMM-Naive
 每个线程去做K维度的内积，然后将结果输出到C矩阵
@@ -122,35 +122,28 @@ void gemm_naive(float* A, float* B, float* C, int M, int N, int K, cudaStream_t 
     gemm_naive_kernel << <blocks, threads, 0, stream >> > (A, B, C, M, N, K);
 }
 ```
-- 我们先按一个warp分析，threadIdx.x范围是0-15，threadIdx.y范围是0-1，那么对应读取A矩阵和写入C矩阵就会出现跨行读写情况，
+- 我们按一个warp分析，threadIdx.x范围是0-15，threadIdx.y范围是0-1，那么对应读取A矩阵和写入C矩阵就都会出现跨行读写情况，
 这样会产生更多的内存事务
 
-- 现在内存读取量是 $(2 * M * N * K + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
+- 整个过程内存读取量是 $(2 * M * N * K + M * N) * 4$ Bytes、浮点运算量是 $2 * M * N * K$ 
 所以计算访存比 
 
 $$
 \frac{2 * M * N * K}{(2 * M * N * K + M * N) * 4} \approx 0.25 Flop/Byte
 $$
 
-- 这是一个比较低的值，我们的显卡理论上能达到 $70 Flop/Byte$ 
-
-- 理论上我们需要做 $M * K + K * N$ 次读取，M * N次写入， $2 * K * M * M$ 次浮点运算
-理论计算访存比 
-
-$$
-\frac{2 * M * N * K}{M * K + N * K} = \frac{2 * M * N}{M + N} Flop/Byte
-$$
+- 这是一个比较低的值，我们的显卡理论上能达到 $70 Flop/Byte$
 
 - SOL对比(绿色是cublas gemm)
 从SOL对比来看Naive是memory bond，说明内存访问很频繁，需要优化内存访问
-![gemm_naive_sol](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_naive_sol.png)
+![gemm_naive_sol](fig_note/gemm_naive_sol.png)
 
 - warp state statistics
 从warp stall能看出来“Stall LG Throttle”很长，说明有很多内存读取操作导致指令队列压力大，下面提示也说明了对global memory操作极其频繁
-![gemm_naive_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_naive_warp_state_statistics.png)
+![gemm_naive_warp_state_statistics](fig_note/gemm_naive_warp_state_statistics.png)
 
 - GFLOPS对比
-![gemm_naive](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_naive.png)
+![gemm_naive](fig/gemm_naive.png)
 
 ### GEMM-Coalescing
 我们将naive kernel的row和col互换下，再按一个warp分析，threadIdx.x范围是0-15，threadIdx.y范围是0-1，这是一样的，但是现在row是只有0和1
@@ -184,14 +177,14 @@ void gemm_coalescing(float* A, float* B, float* C, int M, int N, int K, cudaStre
 
 - SOL对比(绿色是cublas gemm)
 说明内存访问依然很频繁
-![gemm_coalescing_sol](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_coalescing_sol.png)
+![gemm_coalescing_sol](fig_note/gemm_coalescing_sol.png)
 
 - warp state statistics
 从warp stall能看出来“Stall LG Throttle”相比Naive版本有明显改善
-![gemm_coalescing_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_coalescing_warp_state_statistics.png)
+![gemm_coalescing_warp_state_statistics](fig_note/gemm_coalescing_warp_state_statistics.png)
 
 - GFLOPS对比
-![gemm_coalescing](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_coalescing.png)
+![gemm_coalescing](fig/gemm_coalescing.png)
 
 ### GEMM-Smem
 - 在CUDA中，内存一般有全局内存、共享内存、常数内存、纹理内存、寄存器内存，我们每次读数据都是从全局内存读取，效率比较低，因为矩阵乘法可以复用数据，
@@ -244,10 +237,10 @@ $$
 
 - warp state statistics
 从warp stall能看出来“Stall MIO Throttle”成为了新的阻塞瓶颈，这是因为我们使用了共享内存，这里提示我们可以使用更宽的数据读取指令来减少指令降低pipeline压力
-![gemm_smem_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_smem_warp_state_statistics.png)
+![gemm_smem_warp_state_statistics](fig_note/gemm_smem_warp_state_statistics.png)
 
 - GFLOPS对比
-![gemm_smem](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_smem.png)
+![gemm_smem](fig/gemm_smem.png)
 
 ### GEMM_tile1d
 我们设置如下参数：
@@ -286,15 +279,15 @@ $$
 
 - warp state statistics
 “Stall MIO Throttle”相比GEMM_smem有明显改善，这是因为我们数据复用率更高
-![gemm_tile1d_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_tile1d_warp_state_statistics.png)
+![gemm_tile1d_warp_state_statistics](fig_note/gemm_tile1d_warp_state_statistics.png)
 
 - memory workload analysis
 可以看到数据指令明显降低
-![gemm_tile1d_memory_workload](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_tile1d_memory_workload.png)
+![gemm_tile1d_memory_workload](fig_note/gemm_tile1d_memory_workload.png)
 
 - GFLOPS对比
 这里能看到性能提升比较多
-![gemm_tile1d](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_tile1d.png)
+![gemm_tile1d](fig/gemm_tile1d.png)
 
 ### GEMM_tile2d
 同样的我们也可以把BN也放大，这样单个线程就可以处理C矩阵TM*TN个元素
@@ -342,14 +335,14 @@ $$
 - warp state statistics
 现在阻塞周期降低了很多，“Stall Long Scoreboard”这个指标含义是L1Tex(Global, Local, Surface, Tex)结果依赖，后续操作强依赖前面的数据操作，因此需等待前面的数据操作完成
 通常需要优化内存访问来降低阻塞时间
-![gemm_tile2d_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_tile2d_warp_state_statistics.png)
+![gemm_tile2d_warp_state_statistics](fig_note/gemm_tile2d_warp_state_statistics.png)
 
 - memory workload analysis
 数据指令进一步减少，同时这里提示我们访存可以优化，并且有bank conflicts
-![gemm_tile2d_memory_workload](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_tile2d_memory_workload.png)
+![gemm_tile2d_memory_workload](fig_note/gemm_tile2d_memory_workload.png)
 
 - GFLOPS对比
-![gemm_tile2d](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_tile2d.png)
+![gemm_tile2d](fig/gemm_tile2d.png)
 
 ### GEMM_register
 前面我们提到CUDA内存时，寄存器内存比共享内存更快，所以我们可以把共享内存的数据往寄存器搬运，然后再计算累乘，不过实测时发现收益不大
@@ -386,10 +379,10 @@ for (int k = 0; k < BK; k++) {
 
 - warp state statistics
 和GEMM_tile2d相比没啥变化，所以前面提到性能没什么区别，猜测应该是寄存器复用的收益在当前不明显
-![gemm_register_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_register_warp_state_statistics.png)
+![gemm_register_warp_state_statistics](fig_note/gemm_register_warp_state_statistics.png)
 
 - GFLOPS对比
-![gemm_register](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_register.png)
+![gemm_register](fig/gemm_register.png)
 
 ### GEMM_FLOAT4
 从 Global Memory 加载数据到 Shared Memory 时，如果每次只搬运一个 float（32 bit），需要执行大量 LDG.32/STS.32 指令。
@@ -433,16 +426,16 @@ b_smem[k][tx * TN + (n << 2)] = b_smem[0][tx * TN]
 
 - memory workload analysis
 数据指令进一步减少，同时这里提示bank conflicts
-![gemm_float4_memory_workload](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_float4_memory_workload.png)
+![gemm_float4_memory_workload](fig_note/gemm_float4_memory_workload.png)
 
 - GFLOPS对比
-![gemm_float4](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_float4.png)
+![gemm_float4](fig/gemm_float4.png)
 
 ### GEMM_without_bankconflict
 根据前面kernel的结构，我们对共享内存的读写索引进行了重排，从而消除了bank conflicts，大大减少了内存事务，提高了访存效率
 
-![A_Tile_data_layout](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/A_Tile_data_layout.png)
-![B_Tile_data_layout](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/B_Tile_data_layout.png)
+![A_Tile_data_layout](fig_note/A_Tile_data_layout.png)
+![B_Tile_data_layout](fig_note/B_Tile_data_layout.png)
 因为向量化读取一次读4个float，数据Tile大小是8*128=1024个float，所以刚好一个block可以通过float4读取一个Tile所有数据，我们把256个线程映射到
 A和BTile取float4数据时的行列索引
 ```
@@ -497,15 +490,15 @@ for (int k = 0; k < BK; k++) {
 也困惑了很久，我之前理解内存事务是在warp级别的，也就是说要从warp内32个线程的数据索引情况去分析bank冲突和额外的内存事务，但是在向量化读取时，就如下面这种情况
 编译器会识别连续数据的申请从而把前几个线程的向量化读取合并成一个内存事务，这样就避免了bank冲突
 这一块可参考<https://forums.developer.nvidia.com/t/problem-about-bank-conflict-test/285476/2>
-![warp0_tx_data_idx](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/warp0_tx_data_idx.png)
-![warp1_tx_data_idx](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/warp1_tx_data_idx.png)
+![warp0_tx_data_idx](fig_note/warp0_tx_data_idx.png)
+![warp1_tx_data_idx](fig_note/warp1_tx_data_idx.png)
 
 - memory workload analysis
 可以看到这里我们消除了Shared Load的bank conflicts，虽然带来了一定的Shared Store bank conflicts，不过相比于Load是小量
-![gemm_without_bankconflict_memory_workload](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_without_bankconflict_memory_workload.png)
+![gemm_without_bankconflict_memory_workload](fig_note/gemm_without_bankconflict_memory_workload.png)
 
 - GFLOPS对比
-![gemm_without_bankconflict](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_without_bankconflict.png)
+![gemm_without_bankconflict](fig/gemm_without_bankconflict.png)
 
 ### GEMM_double_buffer
 为了避免数据的读写冲突，我们对共享内存和寄存器内存额外分配了一倍的空间，使得当每次读写位置不在同一地址，避免冲突和串行等待，降低了数据同步延迟
@@ -565,10 +558,10 @@ for (int s = 0; s < K; s += BK) {
 ```
 - SOL
 计算吞吐和内存吞吐都有一定提升
-![gemm_double_buffer_sol](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_double_buffer_sol.png)
+![gemm_double_buffer_sol](fig_note/gemm_double_buffer_sol.png)
 
 - GFLOPS对比
-![gemm_double_buffer](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_double_buffer.png)
+![gemm_double_buffer](fig/gemm_double_buffer.png)
 
 ### GEMM_async
 从 SM80（Ampere）开始，NVIDIA 引入了 cp.async 指令，支持从 Global Memory 到 Shared Memory 的异步直接拷贝，无需经过寄存器中转：
@@ -644,10 +637,10 @@ __syncthreads();
 ```
 - memory workload analysis
 数据指令减少
-![gemm_async_memory_workload](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_async_memory_workload.png)
+![gemm_async_memory_workload](fig_note/gemm_async_memory_workload.png)
 
 - GFLOPS对比
-![gemm_async](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_async.png)
+![gemm_async](fig/gemm_async.png)
 
 ### GEMM_async_opt
 由于A矩阵需要转置存储的原因，无法向量化读取，因为异步拷贝要求字节对齐，我们异步拷贝只拷贝了B矩阵，还是要等A矩阵拷贝完才能进行下一步的计算。
@@ -669,14 +662,14 @@ cp_async_wait_group<0>(); // 等待所有数据到位
 
 - SOL对比(绿色是cublas gemm)
 计算吞吐稍微逊色cublas
-![gemm_async_opt_sol](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_async_opt_sol.png)
+![gemm_async_opt_sol](fig_note/gemm_async_opt_sol.png)
 
 - warp state statistics
 “Issued Warp Per Scheduler”指标和cublas一致，说明warp指令发射没有被明显阻塞(理想值是1)
-![gemm_async_opt_warp_state_statistics](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig_note/gemm_async_opt_warp_state_statistics.png)
+![gemm_async_opt_warp_state_statistics](fig_note/gemm_async_opt_warp_state_statistics.png)
 
 - GFLOPS对比
-![gemm_async_opt](https://github.com/Wait-042/GEMM_Naive_to_Cublas/blob/main/fig/gemm_async_opt.png)
+![gemm_async_opt](fig/gemm_async_opt.png)
 
 ## 结语
 每次学GEMM感觉都有很多新的东西，即便是现在感觉自己也还有很多没完全搞明白，有的似懂非懂，有的感觉像是朦胧的摸到了一点边，继续加油吧！
